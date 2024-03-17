@@ -3,14 +3,12 @@
 #include <cmath>
 #include <random>
 #include <future>
-
-// Контейнер для хранения результатов
+#include <queue>
 #include <unordered_map>
 #include <mutex>
+#include <functional>
 
-// Подключаем пул потоков
-#include "thread_pool.h"
-
+template<typename T>
 class Server {
 public:
     Server() {}
@@ -25,52 +23,53 @@ public:
         server_thread.join();
     }
 
-    size_t add_task(std::function<double()> task) {
+    size_t add_task(std::packaged_task<T()> task) {
         std::lock_guard<std::mutex> lock(tasks_mutex);
-        tasks.emplace_back(std::move(task));
-        ids.emplace_back(tasks.size()-1);
-        return tasks.size()-1;
+        std::future<T> result = task.get_future();  
+        tasks.push(std::move(task));
+        ind++;
+        results[ind] = result.share();
+        ids.push(ind);
+        return ind;
     }
 
     double request_result(size_t id_res) {
         std::lock_guard<std::mutex> lock(results_mutex);
-        return results[id_res];
+        return results[id_res].get();
     }
 
 private:
-    std::vector<std::function<double()>> tasks;
-    std::vector<double> ids;
-    std::unordered_map<size_t, double> results;
+    std::queue<std::packaged_task<T()>> tasks;
+    std::queue<int> ids;
+    std::unordered_map<size_t, std::shared_future<T>> results;
     std::mutex tasks_mutex;
     std::mutex results_mutex;
     std::thread server_thread;
+    int ind;
     bool running;
 
     void run() {
-        ThreadPool pool(std::thread::hardware_concurrency());
+        size_t id;
+        std::packaged_task<T()> task;
         while (running) {
-            while (!tasks.empty()) {
-                size_t id;
-                {
-                    std::lock_guard<std::mutex> lock(tasks_mutex);
-                    id = ids.back();
-                    ids.pop_back();
-                    auto task = tasks.back();
-                    tasks.pop_back();
-                    pool.add_task([this, task, id] {
-                        double result = task();
-                        std::lock_guard<std::mutex> lock(results_mutex);
-                        results[id] = result;
-                    });
-                }
+            if (!tasks.empty()) {
+                
+                std::lock_guard<std::mutex> lock(tasks_mutex);
+                id = ids.front();
+                task = std::move(tasks.front());
+                task();
+                tasks.pop();
+                ids.pop();
             }
         }
     }
 };
 
+
+template<typename T>
 class Client {
 public:
-    Client(Server& server, size_t num_tasks, std::function<double(double, double)> task, std::string fp) 
+    Client(Server<T>& server, size_t num_tasks, std::function<T(T, T)> task, std::string fp) 
     : server(server), num_tasks(num_tasks), task(task), fp(fp){}
 
     void run() {
@@ -78,53 +77,55 @@ public:
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_real_distribution<> dis(1.0, 10.0);
-
+        
         for (size_t i = 0; i < num_tasks; ++i) {
-            double argument1 = dis(gen);
-            double argument2 = dis(gen);
-            size_t id = server.add_task([this, argument1, argument2]() { return task(argument1, argument2); });
-            double ans = server.request_result(id);
+            T argument1 = dis(gen);
+            T argument2 = dis(gen);
+            std::packaged_task<T()> task_composed(std::bind(task, argument1, argument2));
+            size_t id = server.add_task(std::move(task_composed));
+            T ans = server.request_result(id);
             static std::mutex cout_mutex;
             std::lock_guard<std::mutex> lock(cout_mutex);
-            std::cout << "Got id: " << id << ", and ans is:" << ans << std::endl;
-            file << "Result " << i << ": " << ans << std::endl;
+            file << "Arg1: " << argument1 << ", Arg2: " << argument2 << ": " << ans << std::endl;
         }
 
         file.close();
     }
 
 private:
-    Server& server;
+    Server<T>& server;
     size_t num_tasks;
-    std::function<double(double, double)> task;
+    std::function<T(T, T)> task;
     std::string fp;
 };
 
-// Задачи клиентов
-double sin_task(double x, double) {
+template<typename T>
+T sin_task(T x, T) {
     return std::sin(x);
 }
 
-double sqrt_task(double x, double) {
+template<typename T>
+T sqrt_task(T x, T) {
     return std::sqrt(x);
 }
 
-double power_task(double base, double exponent) {
+template<typename T>
+T power_task(T base, T exponent) {
     return std::pow(base, exponent);
 }
 
 int main() {
     constexpr size_t num_tasks_per_client = 10;
-    Server server;
+    Server<double> server;
     server.start();
 
-    Client client1(server, num_tasks_per_client, sin_task, "sin_results.txt");
-    Client client2(server, num_tasks_per_client, sqrt_task, "sqrt_results.txt");
-    Client client3(server, num_tasks_per_client, power_task, "power_results.txt");
+    Client<double> client1(server, num_tasks_per_client, sin_task<double>, "sin_results.txt");
+    Client<double> client2(server, num_tasks_per_client, sqrt_task<double>, "sqrt_results.txt");
+    Client<double> client3(server, num_tasks_per_client, power_task<double>, "power_results.txt");
 
-    std::thread thread1(&Client::run, &client1);
-    std::thread thread2(&Client::run, &client2);
-    std::thread thread3(&Client::run, &client3);
+    std::thread thread1(&Client<double>::run, &client1);
+    std::thread thread2(&Client<double>::run, &client2);
+    std::thread thread3(&Client<double>::run, &client3);
 
     thread1.join();
     thread2.join();
