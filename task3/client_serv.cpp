@@ -7,14 +7,14 @@
 #include <unordered_map>
 #include <mutex>
 #include <functional>
+#include <iomanip>
 
 template<typename T>
 class Server {
 public:
-    Server() {}
+    Server() : running(true) {}
 
     void start() {
-        running = true;
         server_thread = std::thread(&Server::run, this);
     }
 
@@ -24,42 +24,50 @@ public:
     }
 
     size_t add_task(std::packaged_task<T()> task) {
-        std::lock_guard<std::mutex> lock(tasks_mutex);
-        std::future<T> result = task.get_future();  
+        std::unique_lock<std::mutex> lock(tasks_mutex);
+        std::future<T> result = task.get_future();
+        size_t id = ++ind;
+        results[id] = result.share();  
         tasks.push(std::move(task));
-        ind++;
-        results[ind] = result.share();
-        ids.push(ind);
-        return ind;
+        ids.push(id);
+        return id;
     }
 
     double request_result(size_t id_res) {
-        std::lock_guard<std::mutex> lock(results_mutex);
-        return results[id_res].get();
+        std::shared_future<T> future;
+        {
+            std::unique_lock<std::mutex> lock(tasks_mutex);
+            future = results.find(id_res)->second;
+        }
+        return future.get();
     }
 
 private:
     std::queue<std::packaged_task<T()>> tasks;
-    std::queue<int> ids;
+    std::queue<size_t> ids;
     std::unordered_map<size_t, std::shared_future<T>> results;
     std::mutex tasks_mutex;
     std::mutex results_mutex;
     std::thread server_thread;
-    int ind;
+    size_t ind = 0;
     bool running;
 
     void run() {
         size_t id;
         std::packaged_task<T()> task;
         while (running) {
+            std::unique_lock<std::mutex> lock(tasks_mutex);
             if (!tasks.empty()) {
-                
-                std::lock_guard<std::mutex> lock(tasks_mutex);
                 id = ids.front();
                 task = std::move(tasks.front());
-                task();
                 tasks.pop();
                 ids.pop();
+                lock.unlock();
+                task();
+            } else {
+                lock.unlock();
+                if (!running)
+                    break;
             }
         }
     }
@@ -76,7 +84,9 @@ public:
         std::ofstream file(fp);
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_real_distribution<> dis(1.0, 10.0);
+        std::uniform_real_distribution<> dis(1.0, 5.0);
+
+        
         
         for (size_t i = 0; i < num_tasks; ++i) {
             T argument1 = dis(gen);
@@ -84,11 +94,9 @@ public:
             std::packaged_task<T()> task_composed(std::bind(task, argument1, argument2));
             size_t id = server.add_task(std::move(task_composed));
             T ans = server.request_result(id);
-            static std::mutex cout_mutex;
-            std::lock_guard<std::mutex> lock(cout_mutex);
-            file << "Arg1: " << argument1 << ", Arg2: " << argument2 << ": " << ans << std::endl;
+            file << std::fixed << std::setprecision(10);
+            file << argument1 << ' ' << argument2  << ' ' << ans << std::endl;
         }
-
         file.close();
     }
 
@@ -115,9 +123,10 @@ T power_task(T base, T exponent) {
 }
 
 int main() {
-    constexpr size_t num_tasks_per_client = 10;
+    constexpr size_t num_tasks_per_client = 10000;
     Server<double> server;
     server.start();
+   
 
     Client<double> client1(server, num_tasks_per_client, sin_task<double>, "sin_results.txt");
     Client<double> client2(server, num_tasks_per_client, sqrt_task<double>, "sqrt_results.txt");
