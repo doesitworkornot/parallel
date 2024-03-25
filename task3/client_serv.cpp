@@ -123,7 +123,7 @@ T power_task(T base, T exponent) {
 }
 
 int main() {
-    constexpr size_t num_tasks_per_client = 10000;
+    constexpr size_t num_tasks_per_client = 100000;
     Server<double> server;
     server.start();
    
