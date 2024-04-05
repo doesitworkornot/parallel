@@ -1,7 +1,7 @@
 import argparse
 import multiprocessing
 import time
-from Queue import Empty
+from queue import Empty
 import cv2
 
 
@@ -33,7 +33,7 @@ class SensorCam(Sensor):
         self.cap.set(4, res[1])
 
     def get(self):
-        ret, frame = self.cap.proc()
+        ret, frame = self.cap.read()
         return frame
 
     def __del__(self):
