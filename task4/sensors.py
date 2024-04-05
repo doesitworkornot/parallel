@@ -1,144 +1,122 @@
 import argparse
 import multiprocessing
 import time
-
+from queue import Empty
 import cv2
-import numpy as np
 
 
-class Sensor():
-    def __init__(self, delay):
-        self.delay = delay
-        self.data = 0
+
+class Sensor:
+    def get(self):
+        raise NotImplementedError("Subclasses must implement method get()")
+
+    
+class SensorX(Sensor):
+    '''Sensor X'''
+    def __init__(self, delay: float):
+        self._delay = delay
+        self._data = 0
+
+    def get(self) -> int:
+        time.sleep(self._delay)
+        self._data += 1
+        return self._data
+
+
+class SensorCam(Sensor):
+    def __init__(self, cam, res):
+        if cam == 'default':
+            self.cap = cv2.VideoCapture(0)
+        else:
+            self.cap = cv2.VideoCapture(cam)
+        self.cap.set(3, res[0])
+        self.cap.set(4, res[1])
 
     def get(self):
-        time.sleep(self.delay)
-        self.data += 1
-        return self.data
-
-
-class cam():
-    def __init__(self, resolution, which):
-        parts = resolution.split('*')
-        self.h = int(parts[0])
-        self.w = int(parts[1])
-        self.cam = cv2.VideoCapture(which)
-
-    def get(self):
-        ret, frame = self.cam.read()
-        # frame = cv2.imread("hubble_cgcg396-2_potw2227a.jpg")
+        ret, frame = self.cap.read()
         return frame
 
     def __del__(self):
-        self.cam.release()
+        self.cap.release()
 
 
-def sens_process(que, sensor):
-    while (1):
+class WindowImage:
+    def __init__(self, freq):
+        self.freq = freq
+        cv2.namedWindow("window")
+
+    def show(self, img, s1, s2, s3):
+        x = img.shape[1] - 700
+        y = img.shape[0] - 50
+        text = f"Sensor 1: {s1} Sensor 2: {s2} Sensor 3: {s3}"
+        cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        cv2.imshow("window", img)
+
+    def __del__(self):
+        cv2.destroyWindow("window")
+
+
+def process(que, sensor):
+    while True:
+        if que.qsize() == 3:
+            try:
+        while True:
+            q.get
+    except Empty:
+        pass
         new_val = sensor.get()
-        while not que.empty():
+        while que.full():
             que.get()
         que.put(new_val)
-
-
-def cam_process(que, cam):
-    h = cam.h
-    w = cam.w
-    while (1):
-        new_val = cam.get()
-        while not que.empty():
-            que.get()
-        new_val = cv2.resize(new_val, (h, w), interpolation=cv2.INTER_AREA)
-        que.put(new_val)
-
-
-def parce(s1, s2, s3, sc):
-    x = sc.shape[1] - 700  # Правая граница минус смещение по горизонтали
-    y = sc.shape[0] - 50  # Нижняя граница минус смещение по вертикали
-
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    size_font = 0.9
-    thic_font = 2
-    color_font = (255, 255, 255)
-
-    text = f"Sensor 1: {s1} Sensor 2: {s2} Sensor 3: {s3}"
-
-    cv2.putText(sc, text, (x, y), font, size_font, color_font, thic_font)
-
-    return sc
 
 
 def main(args):
-    sensor_1 = Sensor(delay=1)
-    sensor_2 = Sensor(delay=0.1)
-    sensor_3 = Sensor(delay=0.01)
-    cam = cam(args.resolution, args.cam)
+    picsize = (int(args.res.split('*')[0]), int(args.res.split('*')[1]))
+    sensor1 = SensorX(1)
+    sensor2 = SensorX(0.1)
+    sensor3 = SensorX(0.01)
+    window = WindowImage(args.freq)
+    camera = SensorCam(args.cam, picsize)
 
-    que_1 = multiprocessing.Queue()
-    que_2 = multiprocessing.Queue()
-    que_3 = multiprocessing.Queue()
-    que_cam = multiprocessing.Queue()
+    queue1 = multiprocessing.Queue()
+    queue2 = multiprocessing.Queue()
+    queue3 = multiprocessing.Queue()
 
-    proc_1 = multiprocessing.Process(target=sens_process, args=(que_1, sensor_1))
-    proc_2 = multiprocessing.Process(target=sens_process, args=(que_2, sensor_2))
-    proc_3 = multiprocessing.Process(target=sens_process, args=(que_3, sensor_3))
-    proc_cam = multiprocessing.Process(target=cam_process, args=(que_cam, cam))
+    read1 = multiprocessing.Process(target=process, args=(queue1, sensor1))
+    read2 = multiprocessing.Process(target=process, args=(queue2, sensor2))
+    read3 = multiprocessing.Process(target=process, args=(queue3, sensor3))
 
-    proc_1.start()
-    proc_2.start()
-    proc_3.start()
-    proc_cam.start()
+    read1.start()
+    read2.start()
+    read3.start()
 
-    h = cam.h
-    w = cam.w
-    old_im = np.zeros((w, h, 3), np.uint8)
+    val1 = val2 = val3 = 0
+    while True:
+        if not queue1.empty():
+            val1 = queue1.get()
+        if not queue2.empty():
+            val2 = queue2.get()
+        if not queue3.empty():
+            val3 = queue3.get()
+        valim = camera.get()
 
-    old_1 = 0
-    old_2 = 0
-    old_3 = 0
-
-    while (1):
-        if not que_1.empty():
-            old_1 = que_1.get()
-
-        if not que_2.empty():
-            old_2 = que_2.get()
-
-        if not que_3.empty():
-            old_3 = que_3.get()
-
-        if not que_cam.empty():
-            old_im = que_cam.get()
-
-        img = parce(old_1, old_2, old_3, old_im)
-        cv2.imshow("img", img)
-
+        window.show(valim, val1, val2, val3)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-    cv2.destroyAllWindows()
 
-    proc_1.terminate()
-    proc_2.terminate()
-    proc_3.terminate()
-    proc_cam.terminate()
+    read1.terminate()
+    read2.terminate()
+    read3.terminate()
 
-    proc_1.join()
-    proc_2.join()
-    proc_3.join()
-    proc_cam.join()
-
-    del sensor_1
-    del sensor_2
-    del sensor_3
-    del cam
-
-
+    read1.join()
+    read2.join()
+    read3.join()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cam', type=int, default=0, help='Cam Name')
-    parser.add_argument('--resolution', type=str, default='900*900', help='Cam res')
-    parser.add_argument('--freq', type=int, default=40, help='frq')
+    parser.add_argument('--cam', type=str, default='default', help='Camera name')
+    parser.add_argument('--res', type=str, default='900*900', help='Camera resolution')
+    parser.add_argument('--freq', type=int, default=40, help='Window frequency')
     args = parser.parse_args()
     main(args)
