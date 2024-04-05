@@ -1,7 +1,6 @@
 import argparse
 import multiprocessing
 import time
-from queue import Empty
 import cv2
 
 
@@ -94,6 +93,8 @@ def main(args):
         sensim = camera.get()
 
         window.show(sensim, sens1, sens2, sens3)
+        time.sleep(1/args.freq)
+
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
