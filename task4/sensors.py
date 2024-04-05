@@ -1,7 +1,7 @@
 import argparse
 import multiprocessing
 import time
-from queue import Empty
+from Queue import Empty
 import cv2
 
 
@@ -33,7 +33,7 @@ class SensorCam(Sensor):
         self.cap.set(4, res[1])
 
     def get(self):
-        ret, frame = self.cap.read()
+        ret, frame = self.cap.proc()
         return frame
 
     def __del__(self):
@@ -49,7 +49,7 @@ class WindowImage:
         x = img.shape[1] - 700
         y = img.shape[0] - 50
         text = f"Sensor 1: {s1} Sensor 2: {s2} Sensor 3: {s3}"
-        cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
         cv2.imshow("window", img)
 
     def __del__(self):
@@ -58,16 +58,9 @@ class WindowImage:
 
 def process(que, sensor):
     while True:
-        if que.qsize() == 3:
-            try:
-        while True:
-            q.get
-    except Empty:
-        pass
-        new_val = sensor.get()
-        while que.full():
-            que.get()
-        que.put(new_val)
+        new_sens = sensor.get()
+        if que.empty():
+            que.put(new_sens)
 
 
 def main(args):
@@ -78,45 +71,45 @@ def main(args):
     window = WindowImage(args.freq)
     camera = SensorCam(args.cam, picsize)
 
-    queue1 = multiprocessing.Queue()
-    queue2 = multiprocessing.Queue()
-    queue3 = multiprocessing.Queue()
+    que1 = multiprocessing.Queue()
+    que2 = multiprocessing.Queue()
+    que3 = multiprocessing.Queue()
 
-    read1 = multiprocessing.Process(target=process, args=(queue1, sensor1))
-    read2 = multiprocessing.Process(target=process, args=(queue2, sensor2))
-    read3 = multiprocessing.Process(target=process, args=(queue3, sensor3))
+    proc1 = multiprocessing.Process(target=process, args=(que1, sensor1))
+    proc2 = multiprocessing.Process(target=process, args=(que2, sensor2))
+    proc3 = multiprocessing.Process(target=process, args=(que3, sensor3))
 
-    read1.start()
-    read2.start()
-    read3.start()
+    proc1.start()
+    proc2.start()
+    proc3.start()
 
-    val1 = val2 = val3 = 0
+    sens1 = sens2 = sens3 = 0
     while True:
-        if not queue1.empty():
-            val1 = queue1.get()
-        if not queue2.empty():
-            val2 = queue2.get()
-        if not queue3.empty():
-            val3 = queue3.get()
-        valim = camera.get()
+        if not que1.empty():
+            sens1 = que1.get()
+        if not que2.empty():
+            sens2 = que2.get()
+        if not que3.empty():
+            sens3 = que3.get()
+        sensim = camera.get()
 
-        window.show(valim, val1, val2, val3)
+        window.show(sensim, sens1, sens2, sens3)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
+    proc1.terminate()
+    proc2.terminate()
+    proc3.terminate()
 
-    read1.terminate()
-    read2.terminate()
-    read3.terminate()
+    proc1.join()
+    proc2.join()
+    proc3.join()
 
-    read1.join()
-    read2.join()
-    read3.join()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cam', type=str, default='default', help='Camera name')
     parser.add_argument('--res', type=str, default='900*900', help='Camera resolution')
-    parser.add_argument('--freq', type=int, default=40, help='Window frequency')
+    parser.add_argument('--freq', type=int, default=40, help='Output frequency')
     args = parser.parse_args()
     main(args)
