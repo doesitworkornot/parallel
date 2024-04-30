@@ -1,0 +1,23 @@
+nvidia = -I/opt/nvidia/hpc_sdk/Linux_x86_64/23.11/cuda/include
+boot = -I/path/to/boost/include -L/path/to/boost/lib -lboost_program_options
+lib = multi/laplace2d.cpp
+flags = -ta=tesla 
+tresh = -std=c++11 -Minfo=all
+
+ifeq ($(MAKECMDGOALS),-l)
+    lib = serial/laplace2d.cpp
+endif
+ifeq ($(MAKECMDGOALS),-m)
+    lib = multi/laplace2d.cpp
+endif
+ifeq ($(MAKECMDGOALS),-g)
+    lib = gpu/laplace2d.cpp
+endif
+
+main: jacobi
+
+jacobi: mk
+	pgc++ $(tresh) $(flags) -o build/jacobi jacobi.cpp $(lib) $(nvidia) $(boot)
+
+mk:
+	mkdir -p build
