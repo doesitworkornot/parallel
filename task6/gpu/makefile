@@ -15,6 +15,7 @@ all: exe run
 exe: laplace2d.o jacobi.o
 	$(LD) $(LDFLAGS) -o $@ $^ ${NVTXLIB} ${boot}
 
+
 run: exe
 	./exe
 
