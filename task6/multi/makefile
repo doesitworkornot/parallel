@@ -15,7 +15,6 @@ all: exe run
 exe: laplace2d.o jacobi.o
 	$(LD) $(LDFLAGS) -o $@ $^ ${NVTXLIB} ${boot}
 
-
 run: exe
 	./exe
 
@@ -29,6 +28,3 @@ clean:
 	$(CC) $(CFLAGS) -c -o $@ $< ${NVTXLIB} ${boot}
 .F90.o:
 	$(FC) $(FFLAGS) -c -o $@ $< ${NVTXLIB} ${boot} 
-
-tr: 
-	$(CXX) $(CXXFLAGS) -c -o $@ $< ${NVTXLIB} ${boot}
