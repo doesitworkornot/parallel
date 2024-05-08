@@ -6,6 +6,8 @@
 #include <iomanip>
 #include "laplace2d.h"
 #include <omp.h>
+#include <cuda_runtime.h>
+#include "cublas_v2.h"
 
 #define OFFSET(x, y, m) (((x) * (m)) + (y))
 
@@ -72,18 +74,36 @@ void Laplace::calcNext(){
     }
 }
 
-double Laplace::calcError(){
+double Laplace::calcError() {
     double error = 0.0;
-    #pragma acc parallel loop reduction(max : error) present(A, Anew)
-    for (int j = 1; j < n - 1; j++){
-        #pragma acc loop
-        for (int i = 1; i < m - 1; i++){
-            error = fmax(error, fabs(Anew[OFFSET(j, i, m)] - A[OFFSET(j, i, m)]));
-        }
-    }
+
+    double *d_A, *d_Anew, *d_error;
+    cudaMalloc(&d_A, m * n * sizeof(double));
+    cudaMalloc(&d_Anew, m * n * sizeof(double));
+    cudaMalloc(&d_error, m * n * sizeof(double));
+
+    cudaMemcpy(d_A, A, m * n * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Anew, Anew, m * n * sizeof(double), cudaMemcpyHostToDevice);
+
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+
+    const double alpha = -1.0;
+    cublasDgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, &alpha, d_Anew, m, &alpha, d_A, m, d_error, m);
+
+    int* max_ind;
+    cublasIdamax(handle, m * n, d_error, 1, max_ind);
+
+    int* min_ind;
+    cublasIdamin(handle, m * n, d_error, 1, min_ind);
+    error = fmax(fabs(*min_ind), *max_ind);
+
+    cublasDestroy(handle);
+    cudaFree(d_A);
+    cudaFree(d_Anew);
+    cudaFree(d_error);
     return error;
 }
-
 void Laplace::swap(){
     double* temp = A;
     A = Anew;

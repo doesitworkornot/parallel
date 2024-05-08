@@ -1,0 +1,34 @@
+CC=pgcc
+CXX=nvc++
+FC=pgfortran
+LD=nvc++
+CFLAGS=-fast -acc=gpu 
+FFLAGS=-fast -acc=gpu 
+CXXFLAGS=-std=c++11 -Minfo=all -fast -acc=gpu -lcublas
+LDFLAGS=-fast -acc=gpu -lcublas
+
+NVTXLIB := -I/opt/nvidia/hpc_sdk/Linux_x86_64/20.9/cuda/11.0/include -L/usr/local/cuda/lib64 -lcudart 
+boot = -I/path/to/boost/include -L/path/to/boost/lib -lboost_program_options
+
+all: exe run
+
+exe: laplace2d.o jacobi.o
+	$(LD) $(LDFLAGS) ${NVTXLIB} -o $@ $^ ${boot}
+
+
+run: exe
+	./exe
+
+.PHONY: clean
+clean:
+	-rm -f *.o *.mod core exe
+.SUFFIXES: .c .cpp .F90 .o
+.cpp.o:
+	$(CXX) $(CXXFLAGS) -c -o $@ $< ${NVTXLIB} ${boot}
+.c.o:
+	$(CC) $(CFLAGS) -c -o $@ $< ${NVTXLIB} ${boot}
+.F90.o:
+	$(FC) $(FFLAGS) -c -o $@ $< ${NVTXLIB} ${boot} 
+
+tr: 
+	$(CXX) $(CXXFLAGS) -c -o $@ $< ${NVTXLIB} ${boot}

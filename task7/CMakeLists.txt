@@ -5,7 +5,7 @@ project(Example_class VERSION 1.0 LANGUAGES CXX)
 find_package(CUDAToolkit REQUIRED)
 
 set(CMAKE_CXX_COMPILER "pgc++")
-set(NAME "mult.c")
+set(NAME "super.cpp")
 
 list(APPEND option_compile -acc=gpu -Minfo=all)
 list(APPEND option_link -acc=gpu)
@@ -23,3 +23,5 @@ target_link_options(${NAME} PRIVATE ${option_link})
 # CUDA and cuBLAS
 target_include_directories(${NAME} PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 target_link_libraries(${NAME} CUDA::cublas)
+# Include Boost Program Options
+target_link_libraries(${PROJECT_NAME} Boost::program_options)

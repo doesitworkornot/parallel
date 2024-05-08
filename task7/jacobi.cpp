@@ -5,8 +5,6 @@
 #include <nvtx3/nvToolsExt.h>
 #include <chrono>
 #include <boost/program_options.hpp>
-#include <cuda_runtime.h>
-#include "cublas_v2.h"
 
 namespace po = boost::program_options;
 

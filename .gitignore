@@ -1,3 +1,6 @@
 build/
 *.o
 exe
+*.sqlite
+*nsys-rep
+out.txt
