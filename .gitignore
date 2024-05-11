@@ -4,3 +4,5 @@ exe
 *.sqlite
 *nsys-rep
 out.txt
+*/CMakeCache.txt
+/CmakeFiles

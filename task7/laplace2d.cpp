@@ -74,40 +74,42 @@ void Laplace::calcNext(){
     }
 }
 
-double Laplace::calcError() {
+double Laplace::calcError(){
     double error = 0.0;
-
     double *d_A, *d_Anew, *d_error;
+    double *h_C = new double[m * m];
     cudaMalloc(&d_A, m * n * sizeof(double));
     cudaMalloc(&d_Anew, m * n * sizeof(double));
     cudaMalloc(&d_error, m * n * sizeof(double));
-
     cudaMemcpy(d_A, A, m * n * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_Anew, Anew, m * n * sizeof(double), cudaMemcpyHostToDevice);
-
     cublasHandle_t handle;
     cublasCreate(&handle);
-
     const double alpha = -1.0;
-    cublasDgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, &alpha, d_Anew, m, &alpha, d_A, m, d_error, m);
-
-    int* max_ind;
-    cublasIdamax(handle, m * n, d_error, 1, max_ind);
-
-    int* min_ind;
-    cublasIdamin(handle, m * n, d_error, 1, min_ind);
-    error = fmax(fabs(*min_ind), *max_ind);
-
+    const double beta = 1.0;
+    cublasDgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, &alpha, d_Anew, m, &beta, d_A, m, d_error, m);
+    cublasDasum(handle, m * n, d_error, 1, &error);
     cublasDestroy(handle);
     cudaFree(d_A);
     cudaFree(d_Anew);
     cudaFree(d_error);
     return error;
 }
+
 void Laplace::swap(){
     double* temp = A;
     A = Anew;
     Anew = temp;
     #pragma acc data present(A, Anew)
     return;
+}
+
+
+void printMatrix(double *matrix, int rows, int cols) {
+    for (int i = 0; i < rows; ++i) {
+        for (int j = 0; j < cols; ++j) {
+            std::cout << matrix[i * cols + j] << "\t";
+        }
+        std::cout << std::endl;
+    }
 }

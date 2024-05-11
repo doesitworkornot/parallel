@@ -2,12 +2,12 @@ CC=pgcc
 CXX=nvc++
 FC=pgfortran
 LD=nvc++
-CFLAGS=-fast -acc=gpu 
-FFLAGS=-fast -acc=gpu 
-CXXFLAGS=-std=c++11 -Minfo=all -fast -acc=gpu -lcublas
-LDFLAGS=-fast -acc=gpu -lcublas
+CFLAGS=-fast -ta=tesla:managed 
+FFLAGS=-fast -ta=tesla:managed 
+CXXFLAGS=-std=c++11 -fast -ta=tesla:managed
+LDFLAGS=-fast -ta=tesla:managed
 
-NVTXLIB := -I/opt/nvidia/hpc_sdk/Linux_x86_64/20.9/cuda/11.0/include -L/usr/local/cuda/lib64 -lcudart 
+NVTXLIB := -I/opt/nvidia/hpc_sdk/Linux_x86_64/20.9/cuda/11.0/include -L/usr/local/cuda/lib64 -cudalib=cublas
 boot = -I/path/to/boost/include -L/path/to/boost/lib -lboost_program_options
 
 all: exe run

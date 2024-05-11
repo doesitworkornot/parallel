@@ -5,6 +5,8 @@
 #include <nvtx3/nvToolsExt.h>
 #include <chrono>
 #include <boost/program_options.hpp>
+#include <cuda_runtime.h>
+#include "cublas_v2.h"
 
 namespace po = boost::program_options;
 
@@ -47,7 +49,7 @@ int main(int argc, char **argv) {
         a.calcNext();
         nvtxRangePop();
         
-        if (iter % 100 == 0){
+        if (iter % 1000 == 0){
             nvtxRangePushA("error");
             error = a.calcError();
             nvtxRangePop();

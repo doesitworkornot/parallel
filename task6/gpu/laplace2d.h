@@ -11,3 +11,5 @@ public:
     double calcError();
     void swap();
 };
+
+void printMatrix(double *matrix, int rows, int cols);
