@@ -12,23 +12,6 @@
 Laplace::Laplace(int m, int n) : m(m), n(n){
     A = new double[n * m];
     Anew = new double[n * m];
-}
-
-
-Laplace::~Laplace(){
-    std::ofstream out("out.txt");
-    out << std::fixed << std::setprecision(5);
-    for (int j = 0; j < n; j++){
-        for (int i = 0; i < m; i++){
-            out << std::left << std::setw(10) << A[OFFSET(j, i, m)] << " ";
-        }
-        out << std::endl;
-    }
-    delete (A);
-    delete (Anew);
-}
-
-void Laplace::initialize(){
     memset(A, 0, n * m * sizeof(double));
     memset(Anew, 0, n * m * sizeof(double));
 
@@ -57,9 +40,23 @@ void Laplace::initialize(){
 }
 
 
+Laplace::~Laplace(){
+    std::ofstream out("out.txt");
+    out << std::fixed << std::setprecision(5);
+    for (int j = 0; j < n; j++){
+        for (int i = 0; i < m; i++){
+            out << std::left << std::setw(10) << A[OFFSET(j, i, m)] << " ";
+        }
+        out << std::endl;
+    }
+    delete (A);
+    delete (Anew);
+}
+
+
+
 void Laplace::calcNext(){
-    double error = 0.0;
-    #pragma acc parallel loop reduction(max:error)
+    #pragma acc parallel loop
     for (int j = 1; j < n - 1; j++){
         #pragma acc loop
         for (int i = 1; i < m - 1; i++){

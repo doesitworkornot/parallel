@@ -12,25 +12,6 @@
 Laplace::Laplace(int m, int n) : m(m), n(n){
     A = new double[n * m];
     Anew = new double[n * m];
-}
-
-
-Laplace::~Laplace(){
-    std::ofstream out("out.txt");
-    out << std::fixed << std::setprecision(5);
-    #pragma acc exit data copyout(A[:m*n], Anew[:m*n])
-    for (int j = 0; j < n; j++){
-        for (int i = 0; i < m; i++){
-            out << std::left << std::setw(10) << A[OFFSET(j, i, m)] << " ";
-        }
-        out << std::endl;
-    } 
-    #pragma acc exit data delete (this)
-    delete (A);
-    delete (Anew);
-}
-
-void Laplace::initialize(){
     memset(A, 0, n * m * sizeof(double));
     memset(Anew, 0, n * m * sizeof(double));
 
@@ -60,6 +41,23 @@ void Laplace::initialize(){
     #pragma acc enter data copyin(this)
     #pragma acc enter data copyin(A[ : m * n], Anew[ : m * n])
 }
+
+
+Laplace::~Laplace(){
+    std::ofstream out("out.txt");
+    out << std::fixed << std::setprecision(5);
+    #pragma acc exit data copyout(A[:m*n], Anew[:m*n])
+    for (int j = 0; j < n; j++){
+        for (int i = 0; i < m; i++){
+            out << std::left << std::setw(10) << A[OFFSET(j, i, m)] << " ";
+        }
+        out << std::endl;
+    } 
+    #pragma acc exit data delete (this)
+    delete (A);
+    delete (Anew);
+}
+
 
 
 void Laplace::calcNext(){

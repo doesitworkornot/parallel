@@ -12,27 +12,10 @@
 #define OFFSET(x, y, m) (((x) * (m)) + (y))
 
 Laplace::Laplace(int m, int n) : m(m), n(n){
+    
+
     A = new double[n * m];
     Anew = new double[n * m];
-}
-
-
-Laplace::~Laplace(){
-    std::ofstream out("out.txt");
-    out << std::fixed << std::setprecision(5);
-    #pragma acc exit data copyout(A[:m*n], Anew[:m*n])
-    for (int j = 0; j < n; j++){
-        for (int i = 0; i < m; i++){
-            out << std::left << std::setw(10) << A[OFFSET(j, i, m)] << " ";
-        }
-        out << std::endl;
-    } 
-    #pragma acc exit data delete (this)
-    delete (A);
-    delete (Anew);
-}
-
-void Laplace::initialize(){
     memset(A, 0, n * m * sizeof(double));
     memset(Anew, 0, n * m * sizeof(double));
 
@@ -64,6 +47,22 @@ void Laplace::initialize(){
 }
 
 
+Laplace::~Laplace(){
+    std::ofstream out("out.txt");
+    out << std::fixed << std::setprecision(5);
+    #pragma acc exit data copyout(A[:m*n], Anew[:m*n])
+    for (int j = 0; j < n; j++){
+        for (int i = 0; i < m; i++){
+            out << std::left << std::setw(10) << A[OFFSET(j, i, m)] << " ";
+        }
+        out << std::endl;
+    } 
+    #pragma acc exit data delete (this)
+    delete (A);
+    delete (Anew);
+}
+
+
 void Laplace::calcNext(){
     #pragma acc parallel loop present(A, Anew)
     for (int j = 1; j < n - 1; j++){
@@ -75,24 +74,44 @@ void Laplace::calcNext(){
 }
 
 double Laplace::calcError(){
-    double error = 0.0;
-    double *d_A, *d_Anew, *d_error;
-    double *h_C = new double[m * m];
-    cudaMalloc(&d_A, m * n * sizeof(double));
-    cudaMalloc(&d_Anew, m * n * sizeof(double));
-    cudaMalloc(&d_error, m * n * sizeof(double));
-    cudaMemcpy(d_A, A, m * n * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_Anew, Anew, m * n * sizeof(double), cudaMemcpyHostToDevice);
-    cublasHandle_t handle;
-    cublasCreate(&handle);
-    const double alpha = -1.0;
-    const double beta = 1.0;
-    cublasDgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, &alpha, d_Anew, m, &beta, d_A, m, d_error, m);
-    cublasDasum(handle, m * n, d_error, 1, &error);
-    cublasDestroy(handle);
-    cudaFree(d_A);
-    cudaFree(d_Anew);
-    cudaFree(d_error);
+    cublasHandle_t handler;
+	cublasStatus_t status;
+
+	status = cublasCreate(&handler);
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        std::cerr << "cublasCreate failed with error code: " << status << std::endl;
+        return 13;
+    }	
+	double error = 1.0;
+	int idx = 0;
+	double alpha = -1.0;
+    #pragma acc data present (A, Anew) wait
+    #pragma acc host_data use_device(A, Anew)
+    {
+        status = cublasDaxpy(handler, n * n, &alpha, Anew, 1, A, 1);
+
+        if (status != CUBLAS_STATUS_SUCCESS) {
+            std::cerr << "cublasDaxpy failed with error code: " << status << std::endl;
+            exit (13);
+        }
+
+                
+        status = cublasIdamax(handler, n * n, A, 1, &idx);
+        if (status != CUBLAS_STATUS_SUCCESS) {
+            std::cerr << "cublasIdamax failed with error code: " << status << std::endl;
+            exit (13);
+        }
+    }
+
+    #pragma acc update host(A[idx - 1]) 
+    error = std::fabs(A[idx - 1]);
+
+    #pragma acc host_data use_device(A, Anew)
+    status = cublasDcopy(handler, n * n, Anew, 1, A, 1);
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        std::cerr << "cublasDcopy failed with error code: " << status << std::endl;
+        exit (13);
+    }
     return error;
 }
 

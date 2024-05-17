@@ -1,7 +1,12 @@
-void initialize(double *restrict A, double *restrict Anew, int m, int n);
+class Laplace {
+private:
+    double* A, * Anew;
+    int m, n;
 
-double calcNext(double *restrict A, double *restrict Anew, int m, int n);
-        
-void swap(double *restrict A, double *restrict Anew, int m, int n);
-
-void deallocate(double *restrict A, double *restrict Anew);
+public:
+    Laplace(int m, int n);
+    ~Laplace();
+    void calcNext();
+    double calcError();
+    void swap();
+};

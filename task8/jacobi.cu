@@ -34,6 +34,9 @@ int main(int argc, char **argv) {
 
     Laplace a(m, m);
 
+    nvtxRangePushA("init");
+    a.initialize();
+    nvtxRangePop();
     printf("Jacobi relaxation Calculation: %d x %d mesh\n", m, m);
 
     auto start = std::chrono::high_resolution_clock::now();
@@ -46,7 +49,7 @@ int main(int argc, char **argv) {
         a.calcNext();
         nvtxRangePop();
         
-        if (iter % 100 == 0){
+        if (iter % 1000 == 0){
             nvtxRangePushA("error");
             error = a.calcError();
             nvtxRangePop();

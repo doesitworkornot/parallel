@@ -6,7 +6,6 @@ private:
 public:
     Laplace(int m, int n);
     ~Laplace();
-    void initialize();
     void calcNext();
     double calcError();
     void swap();
