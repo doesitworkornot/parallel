@@ -16,6 +16,17 @@
 
 #define OFFSET(x, y, m) (((x) * (m)) + (y))
 
+// CUDA error checking macro
+#define CHECK_CUDA(call) \
+    { \
+        cudaError_t err = call; \
+        if (err != cudaSuccess) { \
+            std::cerr << "CUDA error in " << __FILE__ << " at line " << __LINE__ << ": " \
+                      << cudaGetErrorString(err) << std::endl; \
+            exit(EXIT_FAILURE); \
+        } \
+    }
+
 class Laplace {
 private:
     double* A, * Anew;
@@ -29,33 +40,6 @@ public:
     double calcError();
     void swap();
 };
-
-Laplace::Laplace(int m, int n) : m(m), n(n){
-    cudaMalloc(&A, m * n * sizeof(double));
-    cudaMalloc(&Anew, m * n * sizeof(double));
-    int blockSize = 256;
-    int numBlocks = (n * m + blockSize - 1) / blockSize;
-    initializeKernel<<<numBlocks, blockSize>>>(A, Anew, n, m);
-    cudaDeviceSynchronize();
-}
-
-
-Laplace::~Laplace() {
-    std::ofstream out("out.txt");
-    out << std::fixed << std::setprecision(5);
-    hA = new double[n * m];
-    cudaMemcpy(hA, A, n * m * sizeof(double), cudaMemcpyDeviceToHost);
-    for (int j = 0; j < n; j++) {
-        for (int i = 0; i < m; i++) {
-            out << std::left << std::setw(10) << hA[OFFSET(j, i, m)] << " ";
-        }
-        out << std::endl;
-    }
-    out.close();
-    cudaFree(A);
-    cudaFree(Anew);
-    delete (hA);
-}
 
 __global__ void initializeKernel(double *A, double *Anew, int n, int m) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -85,6 +69,35 @@ __global__ void initializeKernel(double *A, double *Anew, int n, int m) {
     }
 }
 
+
+Laplace::Laplace(int m, int n) : m(m), n(n){
+    cudaMalloc(&A, m * n * sizeof(double));
+    cudaMalloc(&Anew, m * n * sizeof(double));
+    int blockSize = 256;
+    int numBlocks = (n * m + blockSize - 1) / blockSize;
+    initializeKernel<<<numBlocks, blockSize>>>(A, Anew, n, m);
+    cudaDeviceSynchronize();
+}
+
+
+Laplace::~Laplace() {
+    std::ofstream out("out.txt");
+    out << std::fixed << std::setprecision(5);
+    hA = new double[n * m];
+    cudaMemcpy(hA, A, n * m * sizeof(double), cudaMemcpyDeviceToHost);
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < m; i++) {
+            out << std::left << std::setw(10) << hA[OFFSET(j, i, m)] << " ";
+        }
+        out << std::endl;
+    }
+    out.close();
+    cudaFree(A);
+    cudaFree(Anew);
+    delete (hA);
+}
+
+
 __global__ void calcNextKernel(double *A, double *Anew, int m, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
     int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
@@ -103,48 +116,65 @@ void Laplace::calcNext() {
     cudaDeviceSynchronize();
 }
 
-__global__ void calcErrorKernel(const double *A, const double *Anew, int n, int m, double *d_errors) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int total_elements = (n - 2) * (m - 2);
+__global__ void calcErrorKernel(const double* __restrict__ A, const double* __restrict__ Anew, int n, int m, double* blockMaxErrors) {
+    extern __shared__ double sharedData[];
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + tid;
 
-    if (idx < total_elements) {
-        int j = 1 + idx / (m - 2);
-        int i = 1 + idx % (m - 2);
-        d_errors[idx] = fabs(Anew[OFFSET(j, i, m)] - A[OFFSET(j, i, m)]);
+    double localMax = 0.0;
+
+    // Loop over the rows this thread block is responsible for
+    for (int j = blockIdx.y + 1; j < n - 1; j += gridDim.y) {
+        for (int i = threadIdx.x + 1; i < m - 1; i += blockDim.x) {
+            double error = fabs(Anew[OFFSET(j, i, m)] - A[OFFSET(j, i, m)]);
+            localMax = fmax(localMax, error);
+        }
+    }
+
+    // Store local maximum in shared memory
+    sharedData[tid] = localMax;
+    __syncthreads();
+
+    // Perform block-wide reduction using CUB
+    typedef cub::BlockReduce<double, 1024> BlockReduce; // Assuming block size is 1024
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+
+    double blockMax = BlockReduce(temp_storage).Reduce(sharedData[tid], cub::Max());
+
+    // The first thread in the block writes the result to global memory
+    if (tid == 0) {
+        blockMaxErrors[blockIdx.x + blockIdx.y * gridDim.x] = blockMax;
     }
 }
 
 double Laplace::calcError() {
-    int total_elements = (n - 2) * (m - 2);
-    double *d_errors = nullptr;
-    cudaMalloc(&d_errors, total_elements * sizeof(double));
+    int numBlocks = (m - 2 + 1023) / 1024; // Assuming block size of 1024
+    dim3 blocks(numBlocks, (n - 2 + numBlocks - 1) / numBlocks);
+    dim3 threads(1024);
 
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (total_elements + threadsPerBlock - 1) / threadsPerBlock;
-    calcErrorKernel<<<blocksPerGrid, threadsPerBlock>>>(A, Anew, n, m, d_errors);
+    // Allocate memory for block max errors
+    double* d_blockMaxErrors;
+    cudaMalloc(&d_blockMaxErrors, blocks.x * blocks.y * sizeof(double));
 
-    double *d_maxError = nullptr;
-    cudaMalloc(&d_maxError, sizeof(double));
+    // Launch the kernel
+    size_t sharedMemSize = 1024 * sizeof(double); // Assuming block size of 1024
+    calcErrorKernel<<<blocks, threads, sharedMemSize>>>(A, Anew, n, m, d_blockMaxErrors);
 
-    // Allocate temporary storage
-    void *d_temp_storage = nullptr;
-    size_t d_temp_storage_bytes = 0;
+    // Allocate memory for the final max error
+    double* h_blockMaxErrors = new double[blocks.x * blocks.y];
+    cudaMemcpy(h_blockMaxErrors, d_blockMaxErrors, blocks.x * blocks.y * sizeof(double), cudaMemcpyDeviceToHost);
 
-    // Obtain the required temporary storage size
-    cub::DeviceReduce::Max(d_temp_storage, d_temp_storage_bytes, d_errors, d_maxError, total_elements);
-    cudaMalloc(&d_temp_storage, d_temp_storage_bytes);
+    // Perform the final reduction on the host
+    double maxError = 0.0;
+    for (int i = 0; i < blocks.x * blocks.y; ++i) {
+        maxError = fmax(maxError, h_blockMaxErrors[i]);
+    }
 
-    // Run the reduction to find the maximum error
-    cub::DeviceReduce::Max(d_temp_storage, d_temp_storage_bytes, d_errors, d_maxError, total_elements);
+    // Free memory
+    delete[] h_blockMaxErrors;
+    cudaFree(d_blockMaxErrors);
 
-    double h_maxError;
-    cudaMemcpy(&h_maxError, d_maxError, sizeof(double), cudaMemcpyDeviceToHost);
-
-    cudaFree(d_errors);
-    cudaFree(d_maxError);
-    cudaFree(d_temp_storage);
-
-    return h_maxError;
+    return maxError;
 }
 
 void Laplace::swap() {
