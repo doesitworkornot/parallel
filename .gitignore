@@ -5,4 +5,6 @@ exe
 *nsys-rep
 out.txt
 */CMakeCache.txt
-/CmakeFiles
+CMakeFiles/
+task8/Makefile
+*.cmake

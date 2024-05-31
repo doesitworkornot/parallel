@@ -1,201 +1,69 @@
 #include <iostream>
-#include <omp.h>
-#include <new>
-#include <nvtx3/nvToolsExt.h>
-#include <chrono>
 #include <boost/program_options.hpp>
-#include <cuda_runtime.h>
-#include "cublas_v2.h"
 #include <cmath>
-#include <cstdlib>
-#include <cstring>
+#include <memory>
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
+#include <chrono>
+#include <cuda_runtime.h>
 #include <cub/cub.cuh>
-#include <algorithm> 
 
 #define OFFSET(x, y, m) (((x) * (m)) + (y))
 
-// CUDA error checking macro
-#define CHECK_CUDA(call) \
-    { \
-        cudaError_t err = call; \
-        if (err != cudaSuccess) { \
-            std::cerr << "CUDA error in " << __FILE__ << " at line " << __LINE__ << ": " \
-                      << cudaGetErrorString(err) << std::endl; \
-            exit(EXIT_FAILURE); \
-        } \
-    }
-
-class Laplace {
-private:
-    double* A, * Anew;
-    double* hA;
-    int m, n;
-
-public:
-    Laplace(int m, int n);
-    ~Laplace();
-    void calcNext();
-    double calcError();
-    void swap();
-};
-
-__global__ void initializeKernel(double *A, double *Anew, int n, int m) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    double corners[4] = {10, 20, 30, 20};
-    if (i < n * m) {
-        int row = i / n;
-        int col = i % n;
-        double step = (n == m) ? (m - 1) / (corners[1] - corners[0]) : 1;
-        double corners[4] = {10, 20, 30, 20};
-
-        if (row == 0) {
-            A[i] = corners[0];
-            Anew[i] = corners[0];
-        } else if (row == n - 1) {
-            A[i] = corners[1];
-            Anew[i] = corners[1];
-        } else if (col == 0) {
-            A[i] = corners[3] + row * step;
-            Anew[i] = corners[3] + row * step;
-        } else if (col == m - 1) {
-            A[i] = corners[2] + row * step;
-            Anew[i] = corners[2] + row * step;
-        } else {
-            A[i] = corners[0] + col * step;
-            Anew[i] = corners[0] + col * step;
-        }
-    }
-}
-
-
-Laplace::Laplace(int m, int n) : m(m), n(n){
-    cudaMalloc(&A, m * n * sizeof(double));
-    cudaMalloc(&Anew, m * n * sizeof(double));
-    int blockSize = 256;
-    int numBlocks = (n * m + blockSize - 1) / blockSize;
-    initializeKernel<<<numBlocks, blockSize>>>(A, Anew, n, m);
-    cudaDeviceSynchronize();
-}
-
-
-Laplace::~Laplace() {
-    std::ofstream out("out.txt");
-    out << std::fixed << std::setprecision(5);
-    hA = new double[n * m];
-    cudaMemcpy(hA, A, n * m * sizeof(double), cudaMemcpyDeviceToHost);
-    for (int j = 0; j < n; j++) {
-        for (int i = 0; i < m; i++) {
-            out << std::left << std::setw(10) << hA[OFFSET(j, i, m)] << " ";
-        }
-        out << std::endl;
-    }
-    out.close();
-    cudaFree(A);
-    cudaFree(Anew);
-    delete (hA);
-}
-
-
-__global__ void calcNextKernel(double *A, double *Anew, int m, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
-    int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
-
-    if (i < m - 1 && j < n - 1) {
-        Anew[j * m + i] = 0.25 * (A[j * m + (i + 1)] + A[j * m + (i - 1)] + A[(j - 1) * m + i] + A[(j + 1) * m + i]);
-    }
-}
-
-void Laplace::calcNext() {
-    dim3 block_size(16, 16); 
-    dim3 grid_size((m + block_size.x - 2) / block_size.x, (n + block_size.y - 2) / block_size.y);
-
-    calcNextKernel<<<grid_size, block_size>>>(A, Anew, m, n);
-
-    cudaDeviceSynchronize();
-}
-
-__global__ void calcErrorKernel(const double* __restrict__ A, const double* __restrict__ Anew, int n, int m, double* blockMaxErrors) {
-    extern __shared__ double sharedData[];
-    int tid = threadIdx.x;
-    int idx = blockIdx.x * blockDim.x + tid;
-
-    double localMax = 0.0;
-
-    // Loop over the rows this thread block is responsible for
-    for (int j = blockIdx.y + 1; j < n - 1; j += gridDim.y) {
-        for (int i = threadIdx.x + 1; i < m - 1; i += blockDim.x) {
-            double error = fabs(Anew[OFFSET(j, i, m)] - A[OFFSET(j, i, m)]);
-            localMax = fmax(localMax, error);
-        }
-    }
-
-    // Store local maximum in shared memory
-    sharedData[tid] = localMax;
-    __syncthreads();
-
-    // Perform block-wide reduction using CUB
-    typedef cub::BlockReduce<double, 1024> BlockReduce; // Assuming block size is 1024
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-
-    double blockMax = BlockReduce(temp_storage).Reduce(sharedData[tid], cub::Max());
-
-    // The first thread in the block writes the result to global memory
-    if (tid == 0) {
-        blockMaxErrors[blockIdx.x + blockIdx.y * gridDim.x] = blockMax;
-    }
-}
-
-double Laplace::calcError() {
-    int numBlocks = (m - 2 + 1023) / 1024; // Assuming block size of 1024
-    dim3 blocks(numBlocks, (n - 2 + numBlocks - 1) / numBlocks);
-    dim3 threads(1024);
-
-    // Allocate memory for block max errors
-    double* d_blockMaxErrors;
-    cudaMalloc(&d_blockMaxErrors, blocks.x * blocks.y * sizeof(double));
-
-    // Launch the kernel
-    size_t sharedMemSize = 1024 * sizeof(double); // Assuming block size of 1024
-    calcErrorKernel<<<blocks, threads, sharedMemSize>>>(A, Anew, n, m, d_blockMaxErrors);
-
-    // Allocate memory for the final max error
-    double* h_blockMaxErrors = new double[blocks.x * blocks.y];
-    cudaMemcpy(h_blockMaxErrors, d_blockMaxErrors, blocks.x * blocks.y * sizeof(double), cudaMemcpyDeviceToHost);
-
-    // Perform the final reduction on the host
-    double maxError = 0.0;
-    for (int i = 0; i < blocks.x * blocks.y; ++i) {
-        maxError = fmax(maxError, h_blockMaxErrors[i]);
-    }
-
-    // Free memory
-    delete[] h_blockMaxErrors;
-    cudaFree(d_blockMaxErrors);
-
-    return maxError;
-}
-
-void Laplace::swap() {
-    double *d_temp;
-    cudaMalloc(&d_temp, n * m * sizeof(double));
-    cudaMemcpy(d_temp, A, n * m * sizeof(double), cudaMemcpyDeviceToDevice);
-    double *temp = A;
-    A = Anew;
-    Anew = temp;
-    cudaFree(d_temp);
-}
-
 namespace po = boost::program_options;
 
-int main(int argc, char **argv) {
+// Custom deleter for CUDA pointers
+struct CudaDeleter {
+    void operator()(double* ptr) const {
+        if (ptr) {
+            cudaFree(ptr);
+        }
+    }
+};
+
+struct CudaVoidDeleter {
+    void operator()(void* ptr) const {
+        if (ptr) {
+            cudaFree(ptr);
+        }
+    }
+};
+
+// Function to initialize arrays A and Anew
+void initFunc(double* A, double* Anew, int n, int m);
+
+// Kernel for matrix calculation
+__global__ void Calculate_matrix(double* A, double* Anew, size_t size) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= size * size) return;
+
+    int i = idx / size;
+    int j = idx % size;
+
+    if (!(j == 0 || i == 0 || j >= size - 1 || i >= size - 1)) {
+        Anew[idx] = 0.25 * (A[idx - 1] + A[idx - size] + A[idx + size] + A[idx + 1]);
+    }
+}
+
+// Kernel for error calculation
+__global__ void Error_matrix(double* Anew, double* A, double* error, int size) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= size * size) return;
+
+    error[idx] = fabs(A[idx] - Anew[idx]);
+}
+
+int main(int argc, char const* argv[]) {
     int m = 4096;
+    int n;
     int iter_max = 1000;
     double tol = 1.0e-6;
-
     double error = 1.0;
 
+    // Parsing program options
     po::options_description desc("Allowed options");
     desc.add_options()
         ("help", "Usage: set precision by running -p 123, set grid size by using -n 123 and set maximum number of iterations by -i 123")
@@ -210,44 +78,121 @@ int main(int argc, char **argv) {
         std::cout << desc << "\n";
         return 1;
     }
+    n = m;
 
-    
-    nvtxRangePushA("init");
-    Laplace a(m, m);
-    nvtxRangePop();
-    printf("Jacobi relaxation Calculation: %d x %d mesh\n", m, m);
+    // Allocating host memory
+    auto A = std::make_unique<double[]>(n * m);
+    auto Anew = std::make_unique<double[]>(n * m);
+    memset(A.get(), 0, n * m * sizeof(double));
+    memset(Anew.get(), 0, n * m * sizeof(double));
+    initFunc(A.get(), Anew.get(), n, m);
 
-    auto start = std::chrono::high_resolution_clock::now();
+    // CUDA stream and graph
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+    cudaGraph_t graph;
+    cudaGraphExec_t graph_exec;
+
+    // Allocating device memory using unique_ptr with custom deleters
+    std::unique_ptr<double, CudaDeleter> error_GPU, error_device, Anew_device, A_device;
+    double* raw_error_GPU;
+    double* raw_error_device;
+    double* raw_Anew_device;
+    double* raw_A_device;
+
+    cudaMalloc(&raw_error_GPU, sizeof(double) * n * n);
+    cudaMalloc(&raw_error_device, sizeof(double) * n * n);
+    cudaMalloc(&raw_Anew_device, sizeof(double) * n * n);
+    cudaMalloc(&raw_A_device, sizeof(double) * n * n);
+
+    error_GPU.reset(raw_error_GPU);
+    error_device.reset(raw_error_device);
+    Anew_device.reset(raw_Anew_device);
+    A_device.reset(raw_A_device);
+
+    // Copying data to device
+    cudaMemcpy(A_device.get(), A.get(), n * n * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(Anew_device.get(), Anew.get(), n * n * sizeof(double), cudaMemcpyHostToDevice);
+
+    // Calculating size of array for device reduction and allocating it
+    double* raw_tmp = nullptr;
+    size_t tmp_size = 0;
+    cub::DeviceReduce::Max(raw_tmp, tmp_size, Anew_device.get(), error_GPU.get(), n * n);
+    cudaMalloc(&raw_tmp, tmp_size);
+    std::unique_ptr<void, CudaVoidDeleter> tmp;
+    tmp.reset(raw_tmp);
+
+    int threads_per_block = 512;
+    int num_blocks = (n * n + threads_per_block - 1) / threads_per_block;
+
     int iter = 0;
+    auto start = std::chrono::high_resolution_clock::now();
 
-    nvtxRangePushA("while");
-    while (error > tol && iter < iter_max)
-    {
-        nvtxRangePushA("calc");
-        a.calcNext();
-        nvtxRangePop();
-        
-        if (iter % 1000 == 0){
-            nvtxRangePushA("error");
-            error = a.calcError();
-            nvtxRangePop();
-            printf("%5d, %0.6f\n", iter, error);
+
+    int iters_one_cycle = 1000;
+
+
+    // Starting recording
+    cudaStreamBeginCapture(stream,cudaStreamCaptureModeGlobal);
+
+    for (int i = 0; i < iters_one_cycle; i++){
+        Calculate_matrix<<<num_blocks, threads_per_block, 0, stream>>>(Anew_device.get(), A_device.get(), n);
+        if (i==iters_one_cycle-1){
+            Error_matrix<<<num_blocks, threads_per_block, 0, stream>>>(Anew_device.get(), A_device.get(), error_device.get(), n);
+            cub::DeviceReduce::Max(tmp.get(),tmp_size,error_device.get(),error_GPU.get(),n*n,stream);
         }
-        
-        nvtxRangePushA("swap");
-        a.swap();
-        nvtxRangePop();
-
-        iter++;
+        std::swap(A_device, Anew_device);
     }
-    nvtxRangePop();
+    cudaStreamEndCapture(stream, &graph);
+    cudaGraphInstantiate(&graph_exec, graph, NULL, NULL, 0);
+    // End of recording
 
-    auto end = std::chrono::high_resolution_clock::now();
+    // Iterating on the graph
+    while (error > tol && iter < iter_max) {
+        cudaGraphLaunch(graph_exec, stream);
+        cudaMemcpy(&error, error_GPU.get(), sizeof(double), cudaMemcpyDeviceToHost);
+        iter += iters_one_cycle;
+        printf("%5d, %0.6f\n", iter, error);
+    }
+
+	auto end = std::chrono::high_resolution_clock::now();
     auto duration_sec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    
+    std::cout << " total: " << duration_sec.count() << " ms\n";
 
+    cudaMemcpy(A.get(),A_device.get(),sizeof(double)*n*n,cudaMemcpyDeviceToHost);
 
+    std::ofstream out("out.txt");
+    out << std::fixed << std::setprecision(5);
+    for (int j = 0; j < n; j++){
+        for (int i = 0; i < m; i++){
+            out << std::left << std::setw(10) << A[OFFSET(j, i, m)] << " ";
+        }
+        out << std::endl;
+    }
 
-    std::cout << " total: " << duration_sec.count() << "s\n";
+    cudaStreamDestroy(stream);
+    cudaGraphDestroy(graph);
+    cudaGraphExecDestroy(graph_exec);
 
     return 0;
+}
+
+void initFunc(double* A, double* Anew, int n, int m) {
+    double corners[4] = {10, 20, 30, 20};
+    double step = (corners[1] - corners[0]) / (n - 1);
+
+    int lastIdx = n - 1;
+    A[0] = Anew[0] = corners[0];
+    A[lastIdx] = Anew[lastIdx] = corners[1];
+    A[n * lastIdx] = Anew[n * lastIdx] = corners[3];
+    A[n * n - 1] = Anew[n * n - 1] = corners[2];
+
+    for (int i = 1; i < n - 1; i++) {
+        double val = corners[0] + i * step;
+        A[i] = Anew[i] = val;
+        A[n * i] = Anew[n * i] = val;
+        A[lastIdx + n * i] = Anew[lastIdx + n * i] = corners[1] + i * step;
+        A[n * lastIdx + i] = Anew[n * lastIdx + i] = corners[3] + i * step;
+    }
 }
