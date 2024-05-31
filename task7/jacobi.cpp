@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
                 exit(1);
             }
             #pragma acc update host(A[idx - 1]) // Copy to host
-            error = std::fabs(A[idx - 1]); // Reading value fortran ?????
+            error = std::fabs(A[idx - 1]); // Reading value fortran
             #pragma acc host_data use_device(A, Anew) // //used to pass device pointers to CUDA
             status = cublasDcopy(handler, n * n, Anew, 1, A, 1); // Fixing data
             if (status != CUBLAS_STATUS_SUCCESS){
